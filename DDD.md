@@ -1,89 +1,145 @@
-# MUST-follow rules for agents (language-agnostic)
+# DDD
 
-These rules apply to every change in every codebase, regardless of language or framework.
+Use DDD as the organizing principle for this repository. Keep the domain at the center of the system and let the outer layers adapt to it.
 
-- Choose the simplest implementation that fully meets the current requirements. Do not build beyond what is asked.
-- Prefer established, well-maintained libraries over custom implementations.
-- Avoid premature abstraction: prefer simple, concrete solutions until real patterns emerge.
-- Prefer composition over centralization: prefer small, focused modules with explicit interfaces over centralized systems.
-- Keep responsibilities clear: keep modules focused and do not mix unrelated concerns (transport, orchestration, state, persistence, infrastructure).
-- Keep dependencies pointing inward: higher layers may depend on lower ones, never the reverse.
-- Propagate errors with context; preserve the original error so callers can still identify and handle it.
-- Never skip verification: never bypass required checks, tests, or quality gates.
-- Make architectural decisions for the long term, not as a stopgap that only works now and gets replaced later.
-- Lean on the dependencies already in the project before writing your own implementation or adding packages. Do not assume a library lacks a capability without checking its documentation and types.
-- Study how established products solve the problem before designing a solution. Adopt their proven patterns and conventions rather than inventing an approach from scratch.
-- Follow the existing code style, naming conventions, and directory layout of the current repository.
+## Core Idea
 
-# Agent Instructions: Domain-Driven Design (DDD)
+This repository should not be organized around technical details like controllers, endpoints, or database tables. It should be organized around the problem domain.
 
-## Core Principles
+The domain contains the business rules, domain types, and ports (interfaces the domain uses). Everything else — API, adapters, infrastructure — exists to serve the domain, not the other way around.
 
-1. **The Domain is Pure:** The domain/core layer MUST NOT import frameworks, ORMs, HTTP libraries, or third-party drivers — only the domain's own types and zero-dep utilities.
-2. **Accept Interfaces, Return Structs:** Depend on abstractions where consumed, but return concrete types from constructor/factory functions.
-3. **Ubiquitous Language:** Module names, type names, and errors must map 1:1 to real-world business concepts.
-4. **Boundary Violations are Fatal:** Never import infrastructure or presentation code into the domain or application layers.
+## Layering
 
-## Repository Directory Structure
+The repository uses the following layers:
+
+- Domain Layer (core)
+- API Layer
+- Adapter Layer
+- Infra Layer
+
+### Domain Module
+
+The domain module is the core: it owns business rules, domain types, and ports (interfaces the domain uses).
+
+- Exposes:
+  - `domain.model`
+  - `domain.service`
+  - `domain.ports`
+- Never depends on the API layer, adapters, infra, or external runtime concerns.
+- Must stay framework-agnostic and easy to test.
+
+Example:
 
 ```text
-src/ or internal/
-├── domain/            # PURE DOMAIN: entities, value objects, aggregates,
-│                      # domain events, services, sentinel errors, repository interfaces
-├── application/       # USE CASES: command/query handlers, DTOs, application interfaces
-├── infrastructure/    # ADAPTERS: persistence, messaging, third-party APIs
-└── interface/         # PRESENTATION: HTTP/gRPC handlers, CLI commands
+domain/
+  model/
+  service/
+  ports/
 ```
 
-## Architectural Layering
+### API Layer
 
-### 1. Domain Layer
+The API layer owns request handling, validation, authentication, response shaping, and transport concerns.
 
-Contains: Entities, Value Objects, Aggregates, Domain Events, Domain Services, Sentinel Errors, Repository Interfaces.
+- Depends on:
+  - `domain.service` (the only domain entry point for mutations)
+  - `domain.model` (read-only, for shaping responses)
+- No business logic in the API layer.
+- Controllers and handlers only translate between the wire format and the domain; entity mutation happens only through `domain.service`.
 
-Rules:
-- Encapsulate internal state; expose mutations only through explicit domain methods.
-- Constructors validate invariants and return explicit domain errors.
-- Return domain sentinel errors (e.g., `ErrInsufficientFunds`), never database or framework errors.
-- Domain Services hold logic that spans multiple aggregates or fits no single entity. Application handlers orchestrate; they never contain business rules.
+Example:
 
-### 2. Application Layer
+```text
+api/
+  routes/
+  controllers/
+  middleware/
+```
 
-Contains: Use Case Handlers (Commands/Queries), DTOs, Application Interfaces (e.g., UnitOfWork).
+### Adapter Layer
 
-Rules:
-- Accept and return primitives or primitive-based DTOs. Never leak domain entities to the presentation layer.
-- Handle cross-cutting concerns: transactions, logging, metrics, dispatching domain events.
-- Each use case loads and mutates exactly one aggregate root; a transaction commits one aggregate.
+The Adapter layer owns integrations, third-party clients, messaging, and external system translation.
 
-### 3. Infrastructure Layer
+- Depends on:
+  - `domain.service`
+  - `domain.model`
+- No direct references to the API layer or other adapters.
+- No domain rules in adapters — only protocol and transport translation; business logic stays in the domain.
 
-Contains: Repositories, Third-Party API Adapters, Message Brokers.
+Example:
 
-Rules:
-- Implement the repository interfaces defined by the consumer (application or domain); never define new abstractions here.
-- Use dedicated persistence models distinct from domain entities, mapped explicitly (never persistence annotations on domain types).
+```text
+adapter/
+  github/
+  payments/
+  messaging/
+```
 
-### 4. Interface / Presentation Layer
+### Infrastructure Module
 
-Contains: HTTP, gRPC, or CLI handlers.
+The infra module owns persistence, configuration, and environment-specific adapters.
 
-Rules:
-- Validate inputs and convert them into application commands/DTOs.
-- Map domain/application errors to appropriate protocol status codes (e.g., `NotFound` → HTTP 404).
+- Depends on:
+  - `domain.ports`
+  - `domain.model`
+- No domain rules in infra.
+- Never referenced by the domain module (ports flow the other way: infra implements them, domain consumes them).
 
-## Anti-Patterns (Refuse to generate these)
+Example:
 
-- **Leaky Domain Types:** Public mutable fields on domain types that allow state changes without invariant checks.
-- **Persistence Annotations on Domain Types:** ORM/column annotations (e.g., `gorm:"primaryKey"`, `db:"account_id"`) applied directly to domain entities.
-- **Global State & Singletons:** Storing connections or configuration in module-level state or `init()` routines instead of passing them via constructors.
-- **Dropped Context:** Omitting context/request parameters from repository or application service signatures (where the language provides them).
-- **Mutable Pointers to Value Objects:** Passing immutable value objects as pointers where value semantics are expected.
+```text
+infra/
+  config/
+  repository/
+  logger/
+```
 
-## Testing Instructions
+## Ownership
 
-- Unit-test domain logic directly — no mocks; call domain methods and assert on returned state or errors.
-- Test use cases with simple in-memory fakes implementing the interfaces.
-- Prefer table-driven tests for invariant edges and factory functions.
+- Every file or package has exactly one owning layer.
+- Every module maps to one layer.
+- No shared catch-all layer for domain logic.
+- If a type or function contains business rules, it belongs in the domain.
+- The composition root (e.g. root `app.ts`) is the only code allowed to import across layers; it wires port implementations into domain services and holds no business logic of its own.
 
-Language-specific conventions (e.g., Go `internal/` layout, constructor idioms) are documented per project, not here.
+## Ports
+
+Ports are interfaces owned by the domain. They describe the capabilities the domain needs without specifying how they are implemented.
+
+- The domain module defines the port.
+- Port implementations live in exactly one layer:
+  - `infra/` — persistence ports (databases, filesystem, object storage).
+  - `adapter/` — external-system clients (third-party APIs, messaging, webhooks).
+- Port implementations are tested separately from domain logic.
+
+Example:
+
+```ts
+// domain/ports
+export interface Repository {
+  save(entity: DomainEntity): Promise<void>;
+}
+```
+
+## Dependency Rules
+
+- The domain never depends on the API, adapters, or infra.
+- The API layer depends on the domain and never on adapters or infra directly.
+- Adapters and infra depend on the domain and may implement ports.
+- Framework code stays outside the domain.
+
+## Testing
+
+- Domain services and domain models are tested directly, without infrastructure.
+- Port implementations are tested against real (or stubbed) external systems, separately from domain tests.
+- The API layer is the seam: testing starts at the API boundary and stops at the domain service.
+- Seam testing: domain is tested with fakes implementing `domain.ports`; API and adapter/infra layers are tested through their seams, not through the full stack.
+- Tests must mirror the production directory structure.
+
+## Practical Guidance
+
+- Start from the domain model, not the endpoints.
+- Identify the business capabilities first, then expose them through the API or adapters.
+- Keep the domain small, explicit, and independent.
+- Prefer moving logic into the domain when a controller, adapter, or infra module starts containing business rules.
+- Every public domain type should be testable without network, database, or framework setup.
