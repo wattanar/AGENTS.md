@@ -55,7 +55,6 @@ Return:
 - Pros
 - Cons
 - Decision
-- DDD.md governs layering and domain decisions in this repo.
 
 # Default format
 Use only sections that apply; omit any that don't. If none fit, use free form.
